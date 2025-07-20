@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Accessible Audio Dinosaur Game</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #2c3e50;
+            color: #ecf0f1;
+            text-align: center;
+            padding: 20px;
+        }
+        #gameContainer {
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        #gameCanvas {
+            border: 2px solid #3498db;
+            background-color: #34495e;
+        }
+        .controls {
+            margin: 20px 0;
+            font-size: 18px;
+        }
+        .status {
+            font-size: 24px;
+            margin: 15px 0;
+            font-weight: bold;
+        }
+        button {
+            font-size: 18px;
+            padding: 10px 20px;
+            margin: 10px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <h1>Accessible Audio Dinosaur Game</h1>
+        <p>Designed for blind and visually impaired players</p>
+        
+        <div class="status">
+            <div id="gameStatus">Press Start to begin</div>
+            <div id="score">Score: 0</div>
+        </div>
+        
+        <canvas id="gameCanvas" width="800" height="200"></canvas>
+        
+        <div class="controls">
+            <p><strong>Controls:</strong></p>
+            <p>SPACEBAR or UP ARROW: Jump</p>
+            <p>Listen for audio cues - frequency increases as obstacles approach!</p>
+        </div>
+        
+        <button id="startBtn" onclick="startGame()">Start Game</button>
+        <button id="stopBtn" onclick="stopGame()">Stop Game</button>
+        <button onclick="toggleSound()">Toggle Sound: <span id="soundStatus">ON</span></button>
+    </div>
+
+    <script>
+        class AccessibleDinosaurGame {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.isRunning = false;
+                this.score = 0;
+                this.gameSpeed = 3;
+                this.soundEnabled = true;
+                
+                // Audio setup
+                this.audioContext = null;
+                this.oscillator = null;
+                this.gainNode = null;
+                this.baseFrequency = 200;
+                
+                // Game objects
+                this.dinosaur = {
+                    x: 50,
+                    y: 150,
+                    width: 40,
+                    height: 40,
+                    velocityY: 0,
+                    isJumping: false,
+                    jumpPower: -12,
+                    gravity: 0.6
+                };
+                
+                this.obstacles = [];
+                this.obstacleSpawnTimer = 0;
+                this.obstacleSpawnInterval = 120; // frames
+                
+                this.setupAudio();
+                this.setupEventListeners();
+                
+                // Speech synthesis for announcements
+                this.synth = window.speechSynthesis;
+            }
+            
+            setupAudio() {
+                if (this.audioContext) return;
+                
+                try {
+                    this.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    this.gainNode = this.audioContext.createGain();
+                    this.gainNode.connect(this.audioContext.destination);
+                    this.gainNode.gain.value = 0.3;
+                } catch (e) {
+                    console.warn('Web Audio API not supported');
+                    this.soundEnabled = false;
+                }
+            }
+            
+            setupEventListeners() {
+                document.addEventListener('keydown', (e) => {
+                    if (e.code === 'Space' || e.code === 'ArrowUp') {
+                        e.preventDefault();
+                        this.jump();
+                    }
+                });
+                
+                // Click to jump for accessibility
+                this.canvas.addEventListener('click', () => this.jump());
+            }
+            
+            jump() {
+                if (!this.isRunning) return;
+                
+                if (!this.dinosaur.isJumping) {
+                    this.dinosaur.velocityY = this.dinosaur.jumpPower;
+                    this.dinosaur.isJumping = true;
+                    this.playJumpSound();
+                    this.announce('Jump');
+                }
+            }
+            
+            playJumpSound() {
+                if (!this.soundEnabled || !this.audioContext) return;
+                
+                const jumpOscillator = this.audioContext.createOscillator();
+                const jumpGain = this.audioContext.createGain();
+                
+                jumpOscillator.connect(jumpGain);
+                jumpGain.connect(this.audioContext.destination);
+                
+                jumpOscillator.frequency.value = 400;
+                jumpOscillator.type = 'square';
+                
+                jumpGain.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+                jumpGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.2);
+                
+                jumpOscillator.start();
+                jumpOscillator.stop(this.audioContext.currentTime + 0.2);
+            }
+            
+            updateProximitySound() {
+                if (!this.soundEnabled || !this.audioContext || this.obstacles.length === 0) {
+                    this.stopProximitySound();
+                    return;
+                }
+                
+                // Find the closest obstacle
+                let closestDistance = Infinity;
+                for (let obstacle of this.obstacles) {
+                    const distance = obstacle.x - this.dinosaur.x;
+                    if (distance > 0 && distance < closestDistance) {
+                        closestDistance = distance;
+                    }
+                }
+                
+                if (closestDistance < 300 && closestDistance !== Infinity) {
+                    // Start or update proximity sound
+                    if (!this.oscillator) {
+                        this.oscillator = this.audioContext.createOscillator();
+                        this.oscillator.connect(this.gainNode);
+                        this.oscillator.type = 'sine';
+                        this.oscillator.start();
+                    }
+                    
+                    // Higher frequency as obstacle gets closer
+                    const frequency = this.baseFrequency + (300 - closestDistance) * 2;
+                    this.oscillator.frequency.value = frequency;
+                    
+                    // Volume increases as obstacle approaches
+                    const volume = Math.max(0.1, (300 - closestDistance) / 300 * 0.3);
+                    this.gainNode.gain.value = volume;
+                } else {
+                    this.stopProximitySound();
+                }
+            }
+            
+            stopProximitySound() {
+                if (this.oscillator) {
+                    this.oscillator.stop();
+                    this.oscillator = null;
+                }
+                if (this.gainNode) {
+                    this.gainNode.gain.value = 0;
+                }
+            }
+            
+            spawnObstacle() {
+                if (this.obstacleSpawnTimer <= 0) {
+                    this.obstacles.push({
+                        x: this.canvas.width,
+                        y: 160,
+                        width: 30,
+                        height: 40
+                    });
+                    this.obstacleSpawnTimer = this.obstacleSpawnInterval;
+                }
+                this.obstacleSpawnTimer--;
+            }
+            
+            updateObstacles() {
+                for (let i = this.obstacles.length - 1; i >= 0; i--) {
+                    this.obstacles[i].x -= this.gameSpeed;
+                    
+                    // Remove obstacles that are off screen
+                    if (this.obstacles[i].x + this.obstacles[i].width < 0) {
+                        this.obstacles.splice(i, 1);
+                        this.score += 10;
+                        this.playScoreSound();
+                    }
+                }
+            }
+            
+            playScoreSound() {
+                if (!this.soundEnabled || !this.audioContext) return;
+                
+                const scoreOscillator = this.audioContext.createOscillator();
+                const scoreGain = this.audioContext.createGain();
+                
+                scoreOscillator.connect(scoreGain);
+                scoreGain.connect(this.audioContext.destination);
+                
+                scoreOscillator.frequency.value = 800;
+                scoreOscillator.type = 'triangle';
+                
+                scoreGain.gain.setValueAtTime(0.1, this.audioContext.currentTime);
+                scoreGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.3);
+                
+                scoreOscillator.start();
+                scoreOscillator.stop(this.audioContext.currentTime + 0.3);
+            }
+            
+            updateDinosaur() {
+                // Apply gravity
+                this.dinosaur.velocityY += this.dinosaur.gravity;
+                this.dinosaur.y += this.dinosaur.velocityY;
+                
+                // Ground collision
+                if (this.dinosaur.y >= 150) {
+                    this.dinosaur.y = 150;
+                    this.dinosaur.velocityY = 0;
+                    this.dinosaur.isJumping = false;
+                }
+            }
+            
+            checkCollisions() {
+                for (let obstacle of this.obstacles) {
+                    if (this.dinosaur.x < obstacle.x + obstacle.width &&
+                        this.dinosaur.x + this.dinosaur.width > obstacle.x &&
+                        this.dinosaur.y < obstacle.y + obstacle.height &&
+                        this.dinosaur.y + this.dinosaur.height > obstacle.y) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            
+            gameOver() {
+                this.isRunning = false;
+                this.stopProximitySound();
+                this.playGameOverSound();
+                this.announce(`Game Over! Final score: ${this.score}`);
+                document.getElementById('gameStatus').textContent = 'Game Over!';
+            }
+            
+            playGameOverSound() {
+                if (!this.soundEnabled || !this.audioContext) return;
+                
+                // Play descending tone sequence
+                const frequencies = [400, 350, 300, 250, 200];
+                frequencies.forEach((freq, index) => {
+                    setTimeout(() => {
+                        const gameOverOscillator = this.audioContext.createOscillator();
+                        const gameOverGain = this.audioContext.createGain();
+                        
+                        gameOverOscillator.connect(gameOverGain);
+                        gameOverGain.connect(this.audioContext.destination);
+                        
+                        gameOverOscillator.frequency.value = freq;
+                        gameOverOscillator.type = 'square';
+                        
+                        gameOverGain.gain.setValueAtTime(0.2, this.audioContext.currentTime);
+                        gameOverGain.gain.exponentialRampToValueAtTime(0.01, this.audioContext.currentTime + 0.4);
+                        
+                        gameOverOscillator.start();
+                        gameOverOscillator.stop(this.audioContext.currentTime + 0.4);
+                    }, index * 200);
+                });
+            }
+            
+            announce(text) {
+                if (this.synth) {
+                    this.synth.cancel(); // Cancel any ongoing speech
+                    const utterance = new SpeechSynthesisUtterance(text);
+                    utterance.volume = 0.3;
+                    utterance.rate = 1.2;
+                    this.synth.speak(utterance);
+                }
+            }
+            
+            draw() {
+                // Clear canvas
+                this.ctx.fillStyle = '#34495e';
+                this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height);
+                
+                // Draw ground
+                this.ctx.fillStyle = '#95a5a6';
+                this.ctx.fillRect(0, 190, this.canvas.width, 10);
+                
+                // Draw dinosaur
+                this.ctx.fillStyle = '#e74c3c';
+                this.ctx.fillRect(this.dinosaur.x, this.dinosaur.y, this.dinosaur.width, this.dinosaur.height);
+                
+                // Draw obstacles
+                this.ctx.fillStyle = '#27ae60';
+                for (let obstacle of this.obstacles) {
+                    this.ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+                }
+                
+                // Draw score
+                this.ctx.fillStyle = '#ecf0f1';
+                this.ctx.font = '20px Arial';
+                this.ctx.textAlign = 'left';
+                this.ctx.fillText(`Score: ${this.score}`, 10, 30);
+            }
+            
+            gameLoop() {
+                if (!this.isRunning) return;
+                
+                this.spawnObstacle();
+                this.updateObstacles();
+                this.updateDinosaur();
+                this.updateProximitySound();
+                
+                if (this.checkCollisions()) {
+                    this.gameOver();
+                    return;
+                }
+                
+                // Increase difficulty
+                if (this.score > 0 && this.score % 100 === 0) {
+                    this.gameSpeed += 0.1;
+                    this.obstacleSpawnInterval = Math.max(60, this.obstacleSpawnInterval - 2);
+                }
+                
+                this.draw();
+                this.updateScore();
+                
+                requestAnimationFrame(() => this.gameLoop());
+            }
+            
+            updateScore() {
+                document.getElementById('score').textContent = `Score: ${this.score}`;
+            }
+            
+            start() {
+                if (this.isRunning) return;
+                
+                // Reset game state
+                this.score = 0;
+                this.gameSpeed = 3;
+                this.obstacleSpawnInterval = 120;
+                this.obstacles = [];
+                this.obstacleSpawnTimer = 0;
+                this.dinosaur.y = 150;
+                this.dinosaur.velocityY = 0;
+                this.dinosaur.isJumping = false;
+                
+                this.setupAudio();
+                if (this.audioContext && this.audioContext.state === 'suspended') {
+                    this.audioContext.resume();
+                }
+                
+                this.isRunning = true;
+                document.getElementById('gameStatus').textContent = 'Game Running';
+                this.announce('Game started! Listen for audio cues and press space to jump');
+                this.gameLoop();
+            }
+            
+            stop() {
+                this.isRunning = false;
+                this.stopProximitySound();
+                document.getElementById('gameStatus').textContent = 'Game Stopped';
+            }
+            
+            toggleSound() {
+                this.soundEnabled = !this.soundEnabled;
+                document.getElementById('soundStatus').textContent = this.soundEnabled ? 'ON' : 'OFF';
+                if (!this.soundEnabled) {
+                    this.stopProximitySound();
+                }
+                this.announce(`Sound ${this.soundEnabled ? 'enabled' : 'disabled'}`);
+            }
+        }
+        
+        // Global game instance
+        let game = new AccessibleDinosaurGame();
+        
+        function startGame() {
+            game.start();
+        }
+        
+        function stopGame() {
+            game.stop();
+        }
+        
+        function toggleSound() {
+            game.toggleSound();
+        }
+        
+        // Initialize the game when page loads
+        window.addEventListener('load', () => {
+            game.announce('Accessible Dinosaur Game loaded. Press start to begin playing.');
+        });
+    </script>
+</body>
+</html>
